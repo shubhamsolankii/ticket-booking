@@ -1,0 +1,30 @@
+spring:
+  application:
+    name: auth-service
+  profiles:
+    active: local
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+---
+spring:
+  config:
+    activate:
+      on-profile: local
+  # datasource, redis, kafka local connection details added once those
+  # infra pieces are actually running next steps, not this one
+
+---
+spring:
+  config:
+    activate:
+      on-profile: docker
+  # docker-network connection details added at Dockerize phase
