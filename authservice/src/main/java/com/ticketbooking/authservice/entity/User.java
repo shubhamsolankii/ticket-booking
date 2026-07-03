@@ -1,6 +1,6 @@
-package ticketbooking.authservice.entity;
+package com.ticketbooking.authservice.entity;
 
-@Entity
+
 public class User {
 
 }
