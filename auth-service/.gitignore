@@ -1,4 +1,6 @@
 HELP.md
+# RSA private key — NEVER commit this
+src/main/resources/keys/private-key.pem
 target/
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
