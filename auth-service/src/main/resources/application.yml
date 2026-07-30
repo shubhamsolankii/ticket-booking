@@ -1,0 +1,367 @@
+# =============================================================================
+# DEFAULT SECTION — applies to ALL profiles unless overridden below
+# =============================================================================
+spring:
+  application:
+    name: auth-service          # Used by Eureka for service registration
+      # and by Config Service to fetch the right config file.
+    # Must match exactly: auth-service.yml in Config repo.
+
+  # ---------------------------------------------------------------------------
+  # JPA — Hibernate is the implementation, but we control it tightly.
+  # ---------------------------------------------------------------------------
+  jpa:
+    hibernate:
+      ddl-auto: validate        # Hibernate verifies the schema matches entities
+        # on startup. It does NOT create or modify tables.
+        # Flyway owns the schema. If they diverge, startup
+      # fails loudly — which is what we want.
+    open-in-view: false         # Critical. Default is true, which keeps a DB
+      # connection open for the entire HTTP request
+      # lifecycle (including view rendering). At 100K RPS
+      # this exhausts the connection pool. Always false
+    # in production microservices.
+    show-sql: false             # Never true in production. Logs every SQL
+    # statement — kills throughput and floods logs.
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        jdbc:
+          batch_size: 50        # For bulk inserts in future batch operations.
+          # No effect on single-row inserts.
+        order_inserts: true     # Groups INSERT statements in JDBC batch.
+        order_updates: true     # Groups UPDATE statements in JDBC batch.
+        format_sql: false       # Only enable when debugging locally.
+
+  # ---------------------------------------------------------------------------
+  # FLYWAY — schema migration engine.
+  # ---------------------------------------------------------------------------
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false  # We start with a clean DB. baseline-on-migrate
+      # is only for adopting Flyway on an existing
+      # schema. False here prevents accidental
+    # migration skips.
+    validate-on-migrate: true   # Flyway checksums every applied migration.
+      # If a migration file is modified after being
+      # applied, startup fails. Schema drift caught
+    # immediately.
+    out-of-order: false         # Migrations must run in version order.
+      # Prevents V3 running before V2 due to a
+    # developer mistake.
+
+  # ---------------------------------------------------------------------------
+  # VIRTUAL THREADS — Java 21. This is what makes 100K RPS feasible
+  # without a massive thread pool. Tomcat uses virtual threads per request.
+  # bcrypt blocks a virtual thread, not an OS thread. OS thread is free
+  # to handle other requests while bcrypt runs. The difference at 100K RPS:
+  # ~200 OS threads vs ~100K virtual threads — platform threads stay manageable.
+  # ---------------------------------------------------------------------------
+  threads:
+    virtual:
+      enabled: true
+
+  # ---------------------------------------------------------------------------
+  # KAFKA PRODUCER — common config across profiles.
+  # Connection details are profile-specific below.
+  # ---------------------------------------------------------------------------
+  kafka:
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all                 # All in-sync replicas must acknowledge before
+        # producer considers the write successful.
+        # Prevents message loss on broker failure.
+        # Slightly higher latency, non-negotiable for
+      # user.registered events.
+      retries: 3
+      properties:
+        enable.idempotence: true
+          # Guarantees exactly-once delivery from producer
+          # side. Combined with acks=all: if a retry occurs
+          # after the broker received the message but before
+        # the ack, the duplicate is detected and discarded.
+        max.in.flight.requests.per.connection: 5
+          # Max 5 with idempotence enabled (Kafka requirement).
+        # Higher values disable idempotence guarantees.
+        spring.json.add.type.headers: false
+          # Don't add __TypeId__ header to Kafka messages.
+          # We control deserialization explicitly. Type headers
+          # create tight coupling between producer and consumer
+        # Java class names.
+
+# =============================================================================
+# LOCAL PROFILE — developer machine, all dependencies on localhost
+# =============================================================================
+---
+spring:
+  config:
+    activate:
+      on-profile: local
+
+  # ---------------------------------------------------------------------------
+  # DATASOURCE — HikariCP (bundled with Spring Boot, zero extra dependency).
+  # Sizing: at 100K RPS with async virtual threads, the bottleneck is not
+  # thread count but DB connection count. PostgreSQL handles ~500 concurrent
+  # connections before it degrades. With 3 auth-service instances locally
+  # for testing, each gets a pool of 20 connections = 60 total. Adjust
+  # per actual instance count in K8s phase.
+  # ---------------------------------------------------------------------------
+  datasource:
+    url: jdbc:postgresql://localhost:5432/auth_db
+    username: auth_user
+    password: auth_password
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: AuthHikariPool-local
+      minimum-idle: 5           # Keep 5 connections warm. Cold connection
+        # establishment costs ~50ms — unacceptable
+      # on the hot token refresh path.
+      maximum-pool-size: 20     # Per instance. DO NOT set this to 100+.
+        # PostgreSQL degrades past ~300-400 concurrent
+        # connections across all clients. See DB-62
+        # (Database Connection Pooling) — this is the
+      # single most common production DB mistake.
+      connection-timeout: 30000 # 30s to acquire a connection from the pool
+        # before throwing an exception. A queue of
+        # requests waiting longer than this indicates
+      # the pool is undersized for the load.
+      idle-timeout: 600000      # 10 min. Idle connections returned to pool.
+      max-lifetime: 1800000     # 30 min max connection lifetime. Prevents
+      # using stale connections after DB failover.
+      connection-test-query: SELECT 1
+      leak-detection-threshold: 60000
+        # Log a warning if a connection is held for
+        # > 60s without being returned to the pool.
+      # Catches connection leaks in development.
+
+  # ---------------------------------------------------------------------------
+  # REDIS — OTP storage only. Single node locally, Cluster in production.
+  # Lettuce (the default Spring client) is non-blocking and supports
+  # Lua scripts natively — required for our atomic OTP get-compare-delete.
+  # ---------------------------------------------------------------------------
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password: ""
+      connect-timeout: 2000ms
+      timeout: 1000ms           # Command timeout. OTP set/get must be < 1ms
+      # in practice; 1000ms is a fail-safe ceiling.
+      lettuce:
+        pool:
+          enabled: true
+          min-idle: 5
+          max-idle: 20
+          max-active: 50        # Max concurrent Redis connections from
+            # this instance. Redis is single-threaded
+          # per shard — don't overwhelm it.
+          max-wait: 500ms       # Max wait for a connection from pool.
+            # If all 50 are busy and a 51st request
+          # arrives, wait 500ms then fail fast.
+
+  # ---------------------------------------------------------------------------
+  # KAFKA — local single-broker setup.
+  # ---------------------------------------------------------------------------
+  kafka:
+    bootstrap-servers: localhost:9092
+
+  # ---------------------------------------------------------------------------
+  # SPRING CLOUD — disabled locally. Config Server and Eureka don't
+  # exist yet. Fail-fast=false so startup doesn't abort when they're
+  # unreachable during local development.
+  # ---------------------------------------------------------------------------
+  cloud:
+    config:
+      enabled: false
+    discovery:
+      enabled: false
+
+eureka:
+  client:
+    enabled: false
+
+# ---------------------------------------------------------------------------
+# JWT — RSA key pair. Private key signs tokens (Auth Service only).
+# Public key verifies tokens (API Gateway, loaded from JWKS endpoint).
+# Key generation command (run once):
+#   openssl genrsa -out src/main/resources/keys/private-key.pem 2048
+#   openssl rsa -in src/main/resources/keys/private-key.pem \
+#               -pubout -out src/main/resources/keys/public-key.pem
+# NEVER commit private-key.pem to git. Add to .gitignore immediately.
+# In production (K8s): mounted as a Secret volume, not baked into image.
+# ---------------------------------------------------------------------------
+jwt:
+  private-key-path: classpath:keys/private-key.pem
+  public-key-path: classpath:keys/public-key.pem
+  access-token-expiry-seconds: 900     # 15 minutes
+  refresh-token-expiry-days: 7
+
+# ---------------------------------------------------------------------------
+# OTP
+# ---------------------------------------------------------------------------
+otp:
+  expiry-seconds: 300                  # 5 minutes
+  length: 6                            # 6-digit numeric
+
+# ---------------------------------------------------------------------------
+# SERVER — embedded Tomcat. Virtual threads (above) replace the fixed
+# thread pool. Tomcat thread pool config becomes irrelevant — each
+# request gets a cheap virtual thread.
+# ---------------------------------------------------------------------------
+server:
+  port: 8081
+  tomcat:
+    connection-timeout: 20000
+
+# ---------------------------------------------------------------------------
+# ACTUATOR + OBSERVABILITY
+# ---------------------------------------------------------------------------
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics,env
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: always      # Show DB, Redis, Kafka health individually.
+        # Never always in public-facing endpoints.
+        # Actuator is internal-only (not routed
+      # through API Gateway).
+  tracing:
+    sampling:
+      probability: 1.0          # 100% trace sampling locally. In production
+        # K8s phase, reduce to 0.1 (10%) to avoid
+      # overwhelming Tempo at 100K RPS.
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+          # Enables p50/p95/p99 histogram buckets for
+          # HTTP request latency. Grafana reads these
+        # directly. Required for our benchmark phase.
+  otlp:
+    tracing:
+      endpoint: http://localhost:4318/v1/traces
+
+logging:
+  level:
+    com.ticketbooking.auth: DEBUG
+    org.springframework.security: INFO  # Set to DEBUG only when debugging
+    # the security filter chain.
+    org.hibernate.SQL: INFO
+    com.zaxxer.hikari: INFO
+
+# =============================================================================
+# DOCKER PROFILE — containerized environment. All connection strings use
+# service names (Docker DNS) or environment variables (K8s Secrets/ConfigMaps).
+# Hardcoded credentials NEVER appear here — they come from env vars.
+# =============================================================================
+---
+spring:
+  config:
+    activate:
+      on-profile: docker
+
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:auth-postgres}:${DB_PORT:5432}/${DB_NAME:auth_db}
+    username: ${DB_USERNAME}    # No default. Must be injected by K8s Secret.
+      # A missing env var causes startup failure —
+      # which is correct. Silent misconfiguration
+    # is worse than a loud startup failure.
+    password: ${DB_PASSWORD}    # No default. K8s Secret injection only.
+    hikari:
+      pool-name: AuthHikariPool-docker
+      minimum-idle: 10          # Higher minimum in production — warm connections
+      # absorb traffic spikes without cold-start latency.
+      maximum-pool-size: 30     # Per instance. With 4 instances in K8s:
+        # 4 × 30 = 120 total connections to PostgreSQL.
+      # Stays well under the 400-connection safe limit.
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      leak-detection-threshold: 60000
+
+  data:
+    redis:
+      host: ${REDIS_HOST:redis-cluster}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD}
+      connect-timeout: 2000ms
+      timeout: 1000ms
+      lettuce:
+        pool:
+          enabled: true
+          min-idle: 10
+          max-idle: 30
+          max-active: 100
+          max-wait: 500ms
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka-1:9092,kafka-2:9092,kafka-3:9092}
+
+  cloud:
+    config:
+      uri: ${CONFIG_SERVER_URI:http://config-service:8888}
+      fail-fast: true           # Refuse to start if Config Server unreachable.
+      # Prevents running with stale or default config.
+      retry:
+        max-attempts: 6
+        initial-interval: 1000
+        max-interval: 2000
+        multiplier: 1.1
+
+eureka:
+  client:
+    enabled: true
+    service-url:
+      defaultZone: ${EUREKA_URI:http://eureka-server:8761/eureka/}
+    registry-fetch-interval-seconds: 5  # How often to refresh the local
+    # registry cache from Eureka.
+  instance:
+    prefer-ip-address: true     # Register with pod IP, not hostname.
+    # More reliable in K8s pod networking.
+    lease-renewal-interval-in-seconds: 10
+    lease-expiration-duration-in-seconds: 30
+
+jwt:
+  private-key-path: ${JWT_PRIVATE_KEY_PATH:file:/secrets/private-key.pem}
+  public-key-path: ${JWT_PUBLIC_KEY_PATH:file:/secrets/public-key.pem}
+    # In K8s: private key mounted as Secret volume
+    # at /secrets/private-key.pem. Never baked
+  # into the Docker image.
+  access-token-expiry-seconds: ${JWT_ACCESS_EXPIRY:900}
+  refresh-token-expiry-days: ${JWT_REFRESH_EXPIRY_DAYS:7}
+
+otp:
+  expiry-seconds: ${OTP_EXPIRY_SECONDS:300}
+  length: 6
+
+server:
+  port: ${SERVER_PORT:8081}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,metrics
+          # No 'env' in production — exposes config
+        # values including partially-masked secrets.
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLE_RATE:0.1}
+        # 10% in production. At 100K RPS, 100% sampling
+        # = 100K spans/sec to Tempo. Tempo can handle it
+        # but at high cost. 10% = statistically valid
+      # for p99 latency measurement.
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://otel-collector:4318/v1/traces}
+
+logging:
+  level:
+    com.ticketbooking.auth: INFO
+    org.springframework.security: WARN
+    org.hibernate.SQL: WARN
