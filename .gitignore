@@ -1,0 +1,321 @@
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+*.iml
+*.iws
+*.ipr
+out/
+*.sublime-project
+*.sublime-workspace
+.classpath
+.project
+.settings/
+bin/
+.metadata/
+.c9/
+*.launch
+.factorypath
+
+# Build Artifacts
+target/
+build/
+dist/
+*.jar
+*.war
+*.ear
+*.zip
+*.tar.gz
+*.rar
+*.class
+*.log
+
+# Maven
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+.m2/repository/
+
+# Gradle
+.gradle/
+gradle-app.setting
+!gradle-wrapper.jar
+!gradle-wrapper.properties
+
+# SBT
+.scala_dependencies
+.sbt
+
+# IntelliJ IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+.idea_modules/
+out/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Eclipse
+.classpath
+.project
+.c9/
+*.launch
+.settings/
+.metadata/
+bin/
+
+# NetBeans
+nbproject/private/
+build/
+nbbuild/
+dist/
+nbdist/
+.nb-gradle/
+
+# Node (if using Node for frontend)
+node_modules/
+npm-debug.log
+yarn-error.log
+dist/
+package-lock.json
+yarn.lock
+
+# Environment Variables & Secrets
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+*.pem
+*.key
+*.keystore
+*.jks
+
+# Logs
+logs/
+*.log
+*.log.*
+log*.txt
+application-*.properties
+!application-default.properties
+!application-prod.properties
+!application-dev.properties
+!application-test.properties
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+*.h2.db
+*.mdb
+*.accdb
+data/
+database/
+
+# Temporary Files
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+*.swp
+*.swo
+*~
+.tmp/
+
+# OS Specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# Java Specific
+*.class
+*.ctxt
+.mtj.tmp/
+*.jar
+*.war
+*.ear
+*.zip
+*.tar.gz
+*.rar
+*.jnilib
+*.dylib
+*.so
+*.dll
+*.exe
+
+# Spring Boot Specific
+application.properties.backup
+application.yml.backup
+.h2.server.properties
+spring-shell-commands.log
+embeddedActiveMqBroker.log
+
+# Docker
+docker-compose.override.yml
+.dockerignore
+
+# Kubernetes
+k8s/secrets/
+k8s/*.key
+k8s/*.pem
+
+# Cloud Provider Configurations
+.aws/
+.gcp/
+cloud-config.json
+
+# Test Reports & Coverage
+test-results/
+coverage/
+.coverage
+htmlcov/
+*.cover
+.pytest_cache/
+.jacoco/
+jacoco.exec
+cobertura.xml
+site/
+
+# Performance & Profiling
+*.jfr
+*.hprof
+*.prof
+perf.data
+perf.data.old
+
+# Misc
+*.orig
+*.rej
+.cache/
+.httpServer/
+.DS_Store
+.AppleDouble
+.LSOverride
+*.sublime-project
+*.sublime-workspace
+**/dist/**
+**/build/**
+
+# Local Development
+local-run.sh
+dev-setup.sh
+.local/
+.venv/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# CI/CD
+.github/workflows/secrets
+.gitlab-ci-secrets.yml
+.circleci/secrets
+
+# Build Output
+*.nar
+*.ear
+*.war
+*.whl
+*.egg-info/
+dist/
+build/
+
+# IDE Plugins
+.idea/plugins/
+.vscode/extensions/
+
+# System & Runtime
+*.pid
+*.pid.lock
+*.ser
+*.snap
+
+# Maven Wrapper
+.mvn/wrapper/maven-wrapper.jar
+.mvn/wrapper/maven-wrapper.properties
+
+# Gradle Wrapper (only ignore wrapper jar, keep gradle-wrapper.properties)
+.gradle/
+!gradle-wrapper.jar
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+.Python
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Additional Spring Boot Microservices specific
+service.log
+services-output/
+*.jks.bak
+.active-profiles
+application-local.properties
+application-docker.properties
+docker-compose.local.yml
+
+# Actuator & Metrics
+metrics/
+actuator-output/
+
+# Temp project files
+.gradle-build-cache/
+.gradle-wrapper-cache/
+
+# Large files (if any)
+*.iso
+*.dmg
+*.exe
+*.msi
+*.zip
+*.7z
+
+# Backup files
+*.swp
+*.bak
+*~
+.#*
+
+# Project specific (add as needed)
+/logs/
+/temp/
+/tmp/
+/output/
+/reports/
+/artifacts/
+

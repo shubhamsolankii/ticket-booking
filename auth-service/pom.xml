@@ -1,0 +1,390 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+	<modelVersion>4.0.0</modelVersion>
+
+	<!-- ================================================================
+         PARENT
+         Spring Boot's parent POM manages versions for ~300 dependencies.
+         We override only what we must. Never fight the BOM.
+    ================================================================ -->
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>3.3.4</version>
+		<relativePath/>
+	</parent>
+
+	<!-- ================================================================
+         PROJECT IDENTITY
+    ================================================================ -->
+	<groupId>com.ticketbooking</groupId>
+	<artifactId>auth-service</artifactId>
+	<version>1.0.0-SNAPSHOT</version>
+	<packaging>jar</packaging>
+	<name>auth-service</name>
+	<description>
+		Identity and credential management for the Ticket Booking Platform.
+		Owns: registration, email verification, OTP login, JWT issuance,
+		token refresh, logout, password reset, OAuth2/Keycloak exchange.
+		Does NOT own: user profiles, booking data, seat state.
+	</description>
+
+	<!-- ================================================================
+         VERSION PROPERTIES
+         Centralized here so version bumps happen in exactly one place.
+         Never hardcode versions directly in <dependency> blocks.
+    ================================================================ -->
+	<properties>
+		<java.version>21</java.version>
+		<spring-cloud.version>2023.0.3</spring-cloud.version>
+		<jjwt.version>0.12.6</jjwt.version>
+		<ulid-creator.version>5.2.3</ulid-creator.version>
+	</properties>
+
+	<dependencies>
+
+		<!-- ============================================================
+             WEB LAYER
+             Embeds Tomcat, provides @RestController, @RequestMapping etc.
+             Tomcat thread pool will be tuned in application.yml.
+        ============================================================ -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-web</artifactId>
+		</dependency>
+
+		<!-- ============================================================
+             SECURITY
+             Provides Spring Security filter chain, PasswordEncoder,
+             SecurityContext. We configure it explicitly — auto-config
+             will be overridden in SecurityConfig.
+        ============================================================ -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-security</artifactId>
+		</dependency>
+
+		<!-- ============================================================
+             VALIDATION
+             Enables @Valid, @NotBlank, @Email, @Size on DTOs.
+             Backed by Hibernate Validator (Jakarta Bean Validation 3.x).
+             Request validation happens at the controller boundary —
+             invalid requests never reach the service layer.
+        ============================================================ -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-validation</artifactId>
+		</dependency>
+
+		<!-- ============================================================
+             JPA + POSTGRESQL DRIVER
+             JPA for entity mapping and repository abstraction.
+             PostgreSQL driver at runtime only — compile code against
+             the JPA API, not the driver directly.
+             HikariCP connection pool is included automatically by
+             spring-boot-starter-data-jpa. No extra dependency needed.
+        ============================================================ -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-jpa</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.postgresql</groupId>
+			<artifactId>postgresql</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+
+		<!-- ============================================================
+             FLYWAY — DB MIGRATIONS
+             flyway-core: the engine.
+             flyway-database-postgresql: Flyway 10+ requires an explicit
+             database-specific artifact. Without it, Flyway cannot talk
+             to PostgreSQL. This is a common trap.
+             Hibernate DDL generation (spring.jpa.hibernate.ddl-auto)
+             will be set to 'validate' — Flyway owns the schema,
+             not Hibernate.
+        ============================================================ -->
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-core</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-database-postgresql</artifactId>
+		</dependency>
+
+		<!-- ============================================================
+             REDIS
+             Used exclusively for OTP storage (SETEX with 5-min TTL).
+             We use RedisTemplate directly — no Spring Cache abstraction
+             (@Cacheable) needed here. OTP keys are explicit, TTL-managed,
+             and require Lua script support for atomic get-compare-delete.
+             Lettuce (the default client) supports Lua scripts natively.
+        ============================================================ -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-redis</artifactId>
+		</dependency>
+
+		<!-- ============================================================
+             KAFKA
+             Used for async events ONLY:
+             - user.registered  → User Service (create profile)
+             - otp.send         → Notification Service (send SMS)
+             - email.verify     → Notification Service (send email)
+             - password.reset   → Notification Service (send email)
+             Auth Service is a PRODUCER only. It consumes nothing.
+             spring-kafka-test pulled in test scope below.
+        ============================================================ -->
+		<dependency>
+			<groupId>org.springframework.kafka</groupId>
+			<artifactId>spring-kafka</artifactId>
+		</dependency>
+
+		<!-- ============================================================
+             JWT — JJWT (io.jsonwebtoken)
+             Three artifacts, two scopes:
+             - jjwt-api:     compile scope — the API we code against
+             - jjwt-impl:    runtime scope — the implementation (Bouncy Castle
+                             handles RSA operations). Never code against impl.
+             - jjwt-jackson: runtime scope — JSON serialization of claims.
+             Why JJWT over alternatives:
+             - Spring Security OAuth2 Resource Server (Nimbus): designed
+               for TOKEN VALIDATION. We are the TOKEN ISSUER. Wrong tool.
+             - Auth0 java-jwt: less feature-complete for RSA key management.
+             - JJWT 0.12.x has first-class RS256 support, JWKS key pair
+               generation, and matches the Spring Boot security tutorial
+               series in your resource library (SB-36 through SB-40).
+        ============================================================ -->
+		<dependency>
+			<groupId>io.jsonwebtoken</groupId>
+			<artifactId>jjwt-api</artifactId>
+			<version>${jjwt.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>io.jsonwebtoken</groupId>
+			<artifactId>jjwt-impl</artifactId>
+			<version>${jjwt.version}</version>
+			<scope>runtime</scope>
+		</dependency>
+		<dependency>
+			<groupId>io.jsonwebtoken</groupId>
+			<artifactId>jjwt-jackson</artifactId>
+			<version>${jjwt.version}</version>
+			<scope>runtime</scope>
+		</dependency>
+
+		<!-- ============================================================
+             ULID GENERATOR
+             com.github.f4b6a3:ulid-creator is the actively maintained
+             ULID library for Java. UlidCreator.getMonotonicUlid() gives
+             monotonically increasing ULIDs within the same millisecond —
+             even better B-tree locality than standard ULID.
+             Usage: UlidCreator.getMonotonicUlid().toString()
+             Stored as CHAR(26) in PostgreSQL. Never as UUID type.
+        ============================================================ -->
+		<dependency>
+			<groupId>com.github.f4b6a3</groupId>
+			<artifactId>ulid-creator</artifactId>
+			<version>${ulid-creator.version}</version>
+		</dependency>
+
+		<!-- ============================================================
+             FEIGN CLIENT
+             Declarative HTTP client for the ONE synchronous external call
+             this service makes: Keycloak token endpoint during OAuth2
+             token exchange (POST /auth/oauth2/token).
+             All other cross-service calls from Auth Service go via Kafka.
+             Feign + Resilience4j circuit breaker (below) protects us
+             when Keycloak is degraded or unreachable.
+        ============================================================ -->
+		<dependency>
+			<groupId>org.springframework.cloud</groupId>
+			<artifactId>spring-cloud-starter-openfeign</artifactId>
+		</dependency>
+
+		<!-- ============================================================
+             SPRING CLOUD CONFIG CLIENT
+             On startup, this service fetches its configuration from the
+             Config Service (Git-backed). Until the Config Service is
+             built, we use local application.yml. The client is present
+             now so config externalization works from day one.
+             Connection failure handling: spring.cloud.config.fail-fast=true
+             ensures the service refuses to start if Config Service is
+             unreachable — no silent misconfiguration.
+        ============================================================ -->
+		<dependency>
+			<groupId>org.springframework.cloud</groupId>
+			<artifactId>spring-cloud-starter-config</artifactId>
+		</dependency>
+
+		<!-- ============================================================
+             EUREKA CLIENT
+             Registers this service with the Eureka Server for service
+             discovery. Other services can find auth-service by name,
+             not by hardcoded host:port. Critical for multi-instance
+             deployments — all N instances register individually.
+        ============================================================ -->
+		<dependency>
+			<groupId>org.springframework.cloud</groupId>
+			<artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+		</dependency>
+
+		<!-- ============================================================
+             CIRCUIT BREAKER — Resilience4j
+             Wraps the Keycloak FeignClient call. If Keycloak is down
+             or slow (timeout > 2s), the circuit opens and we return
+             503 immediately instead of queuing threads that wait forever.
+             Does NOT affect email/password or OTP login paths —
+             those have zero external dependencies.
+             AOP is required for @CircuitBreaker annotation processing.
+        ============================================================ -->
+		<dependency>
+			<groupId>org.springframework.cloud</groupId>
+			<artifactId>spring-cloud-starter-circuitbreaker-resilience4j</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-aop</artifactId>
+		</dependency>
+
+		<!-- ============================================================
+             ACTUATOR + PROMETHEUS
+             Actuator exposes /actuator/health, /actuator/metrics etc.
+             micrometer-registry-prometheus scrapes these metrics and
+             exposes /actuator/prometheus for Prometheus to pull.
+             Grafana reads from Prometheus. This is the observability
+             chain: code → Micrometer → Prometheus → Grafana.
+        ============================================================ -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.micrometer</groupId>
+			<artifactId>micrometer-registry-prometheus</artifactId>
+		</dependency>
+
+		<!-- ============================================================
+             DISTRIBUTED TRACING — OpenTelemetry
+             micrometer-tracing-bridge-otel: bridges Micrometer's tracing
+             API to the OpenTelemetry SDK. Every @Observed method and
+             every HTTP request gets a span automatically.
+             opentelemetry-exporter-otlp: exports spans to the
+             OpenTelemetry Collector (which forwards to Grafana Tempo).
+             The X-Correlation-ID we inject at the Gateway is carried
+             as a baggage item through this trace context.
+        ============================================================ -->
+		<dependency>
+			<groupId>io.micrometer</groupId>
+			<artifactId>micrometer-tracing-bridge-otel</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.opentelemetry</groupId>
+			<artifactId>opentelemetry-exporter-otlp</artifactId>
+		</dependency>
+
+		<!-- ============================================================
+             LOMBOK
+             Eliminates boilerplate: @Getter, @Setter, @Builder,
+             @RequiredArgsConstructor, @Slf4j.
+             optional=true means downstream projects that depend on
+             auth-service (none in our case) don't inherit Lombok.
+             Excluded from the fat JAR in the build plugin below.
+        ============================================================ -->
+		<dependency>
+			<groupId>org.projectlombok</groupId>
+			<artifactId>lombok</artifactId>
+			<optional>true</optional>
+		</dependency>
+
+		<!-- ============================================================
+             TEST DEPENDENCIES
+             spring-boot-starter-test: JUnit 5, Mockito, AssertJ.
+             spring-security-test: SecurityMockMvcRequestPostProcessors
+               for testing secured endpoints.
+             testcontainers junit-jupiter: @Testcontainers integration.
+             testcontainers postgresql: spins up a REAL PostgreSQL
+               container for integration tests. H2 is banned.
+             spring-kafka-test: EmbeddedKafkaBroker for Kafka producer
+               integration tests without a running Kafka cluster.
+        ============================================================ -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.security</groupId>
+			<artifactId>spring-security-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>postgresql</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.kafka</groupId>
+			<artifactId>spring-kafka-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+
+	</dependencies>
+
+	<!-- ================================================================
+         DEPENDENCY MANAGEMENT — Spring Cloud BOM
+         Spring Cloud has its own release train versioning independent
+         of Spring Boot. The BOM import here tells Maven: "for any
+         Spring Cloud dependency, use versions from this BOM."
+         2023.0.3 is compatible with Spring Boot 3.3.x.
+         Never mix Spring Cloud versions from different release trains.
+    ================================================================ -->
+	<dependencyManagement>
+		<dependencies>
+			<dependency>
+				<groupId>org.springframework.cloud</groupId>
+				<artifactId>spring-cloud-dependencies</artifactId>
+				<version>${spring-cloud.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
+
+	<!-- ================================================================
+         BUILD
+         spring-boot-maven-plugin: packages as executable fat JAR.
+         Lombok excluded from the fat JAR — it's a compile-time tool,
+         not needed at runtime. Including it wastes ~1.5MB per JAR.
+         In the Dockerize phase we add a multi-stage build that uses
+         this plugin's layer extraction feature for optimal Docker
+         layer caching.
+    ================================================================ -->
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+				<configuration>
+					<excludes>
+						<exclude>
+							<groupId>org.projectlombok</groupId>
+							<artifactId>lombok</artifactId>
+						</exclude>
+					</excludes>
+				</configuration>
+			</plugin>
+		</plugins>
+	</build>
+
+</project>
