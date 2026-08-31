@@ -1,0 +1,523 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+        Spring Boot parent POM manages:
+          - Plugin versions (maven-compiler-plugin, surefire, etc.)
+          - Dependency versions for everything in the Spring ecosystem
+          - Default compiler source/target via <java.version>
+        We override nothing from the parent unless we have an explicit reason.
+        Specifying a version on any dependency that the parent already manages
+        is a maintenance smell — it will drift out of sync on parent upgrades.
+    -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.3.4</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.ticketbooking</groupId>
+    <artifactId>auth-service</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <packaging>jar</packaging>
+    <name>auth-service</name>
+    <description>
+        Authentication and Identity Service — email/password, OTP, JWT issuance,
+        refresh token rotation, OAuth2/Keycloak delegation.
+        Owns identity only. Profile data lives in User Service.
+    </description>
+
+    <properties>
+        <java.version>25</java.version>
+
+        <!--
+            Spring Cloud 2023.0.3 is the release train compatible with
+            Spring Boot 3.3.x. Never mix release trains — mismatched
+            Spring Cloud + Spring Boot versions are the #1 cause of
+            mysterious autoconfiguration failures in microservices.
+        -->
+        <spring-cloud.version>2023.0.3</spring-cloud.version>
+
+        <!--
+            JJWT 0.12.x is the modern API. 0.11.x and below have a
+            completely different API surface — tutorials using
+            Jwts.parser().setSigningKey() are on the old API.
+            Never mix 0.11 and 0.12 artifacts.
+        -->
+        <jjwt.version>0.12.6</jjwt.version>
+
+        <!--
+            Testcontainers BOM version. All testcontainers modules
+            (postgresql, kafka, junit-jupiter) must be on the same version.
+            The BOM import below enforces this — we never specify
+            individual testcontainers artifact versions anywhere.
+        -->
+        <testcontainers.version>1.19.8</testcontainers.version>
+
+        <!--
+            ULID Creator — time-sortable, URL-safe, no UUID anywhere.
+            Not managed by Spring Boot parent, so we pin the version here.
+            5.2.3 is the current stable release with Java 21 compatibility.
+        -->
+        <ulid-creator.version>5.2.3</ulid-creator.version>
+    </properties>
+
+    <!--
+        BOM IMPORTS — dependencyManagement does NOT add dependencies.
+        It only governs which version to use IF the dependency is declared
+        in <dependencies>. This is the correct way to consume BOMs.
+        Never put BOM imports in <dependencies> directly.
+    -->
+    <dependencyManagement>
+        <dependencies>
+
+            <!--
+                Spring Cloud BOM: governs versions for Eureka client,
+                OpenFeign, Resilience4j, Config client, Spring Cloud Bus.
+                Without this, each Spring Cloud artifact needs a manual version.
+            -->
+            <dependency>
+                <groupId>org.springframework.cloud</groupId>
+                <artifactId>spring-cloud-dependencies</artifactId>
+                <version>${spring-cloud.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <!--
+                Testcontainers BOM: ensures all testcontainers modules
+                (junit-jupiter, postgresql, kafka) are on identical versions.
+                Version skew between testcontainers modules causes silent
+                classloading failures that are very hard to diagnose.
+            -->
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers-bom</artifactId>
+                <version>${testcontainers.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+
+        <!-- ============================================================
+             CORE SPRING BOOT
+             These are the foundational starters. Each starter pulls in
+             a curated set of transitive dependencies. We never manually
+             add what a starter already provides transitively.
+        ============================================================ -->
+
+        <!--
+            Web: Tomcat (embedded), Spring MVC, Jackson (JSON).
+            We use Tomcat with virtual threads (configured in application.yml
+            via spring.threads.virtual.enabled=true) — not WebFlux.
+            At 100K auth RPS, virtual threads on Tomcat outperform the
+            traditional thread-per-request model without reactive complexity.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!--
+            JPA + Hibernate: entity lifecycle, repositories, JPQL.
+            HikariCP connection pool is included by this starter —
+            we configure pool sizing in application.yml, not here.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+
+        <!--
+            Spring Security: filter chain, BCryptPasswordEncoder bean,
+            SecurityContext, UserDetailsService interface.
+            This is the foundation for Step 11 (SecurityConfig).
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+
+        <!--
+            Bean Validation (Hibernate Validator): @Valid on request DTOs,
+            @NotBlank, @Email, @Size, @Pattern. Validation happens at the
+            controller boundary — never inside service methods.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!--
+            Actuator: /actuator/health, /actuator/prometheus, /actuator/info.
+            Custom RedisHealthIndicator and database health are added in Step 19.
+            Enabled here from day one — not added as an afterthought.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!--
+            AOP: AspectJ weaving support for the request/response logging
+            aspect (Step 4). Spring AOP uses proxy-based weaving by default —
+            this starter enables @Aspect, @Around, @Before, @After on
+            Spring-managed beans.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
+        </dependency>
+
+        <!-- ============================================================
+             DATABASE
+        ============================================================ -->
+
+        <!--
+            PostgreSQL JDBC driver. Runtime scope because our code never
+            imports PostgreSQL classes directly — we program to the
+            JDBC/JPA interfaces. The driver is loaded at runtime by
+            DataSource configuration.
+            NEVER add H2 or any in-memory DB. Not even for tests.
+        -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!--
+            Flyway core: SQL-based schema migrations, version-controlled,
+            applied in order on every startup. Spring Boot autoconfigures
+            Flyway to run before the application context is fully ready —
+            schema is always in sync before any repository is touched.
+        -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+
+        <!--
+            Flyway 10+ splits database-specific support into separate modules.
+            Without this artifact, Flyway 10 cannot connect to PostgreSQL —
+            it will fail silently or throw a cryptic "no supported database"
+            error. This is a common gotcha when upgrading from Flyway 9.
+        -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
+
+        <!-- ============================================================
+             REDIS
+             OTP storage (SETEX with TTL), rate limit counters.
+             NOT used for refresh token storage — PostgreSQL handles that
+             because token revocation requires strong consistency + durability.
+        ============================================================ -->
+
+        <!--
+            Spring Data Redis: RedisTemplate, StringRedisTemplate,
+            Lettuce client (default). Lettuce is non-blocking and handles
+            connection multiplexing — one connection can serve many threads.
+            This is critical at 100K RPS where we cannot afford a connection
+            per thread.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
+        <!--
+            Commons Pool 2: required for Lettuce connection pooling.
+            Without this on the classpath, spring.data.redis.lettuce.pool.*
+            properties are silently ignored and no pooling occurs.
+            At 100K RPS, unpooled Redis connections mean connection churn
+            on every OTP operation — unacceptable.
+        -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-pool2</artifactId>
+        </dependency>
+
+        <!-- ============================================================
+             JWT — RS256 ASYMMETRIC SIGNING
+             Auth Service holds private key (signs).
+             API Gateway holds public key only (verifies via JWKS endpoint).
+             Zero JWT validation calls to Auth Service per request.
+        ============================================================ -->
+
+        <!--
+            JJWT API: the interfaces we program against (JwtParser, Jwts,
+            Claims). Compile-scope — our code imports these types directly.
+        -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+            <version>${jjwt.version}</version>
+        </dependency>
+
+        <!--
+            JJWT implementation: the actual signing/parsing logic.
+            Runtime-only — never import jjwt-impl classes in your code.
+            This is the correct encapsulation: program to the API,
+            let the runtime provide the implementation. If JJWT ever
+            changes its internal implementation, your code is unaffected.
+        -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <version>${jjwt.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!--
+            JJWT Jackson: JSON serialization of JWT claims using Jackson.
+            Runtime-only — JJWT discovers this via ServiceLoader at runtime.
+            Required because JWT claims are JSON objects under the hood.
+        -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <version>${jjwt.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- ============================================================
+             ULID — PRIMARY KEY STRATEGY FOR ALL ENTITIES
+             Time-sortable, URL-safe, no hyphens, no UUID anywhere.
+             Generated in the service layer before DB insert.
+             Never by the database. Never auto-increment.
+        ============================================================ -->
+
+        <!--
+            Usage: UlidCreator.getUlid().toString()
+            Stored as CHAR(26) in PostgreSQL.
+            The Monotonic ULID variant (UlidCreator.getMonotonicUlid())
+            is preferred when inserting multiple rows in rapid succession —
+            it guarantees strict ordering within the same millisecond.
+        -->
+        <dependency>
+            <groupId>com.github.f4b6a3</groupId>
+            <artifactId>ulid-creator</artifactId>
+            <version>${ulid-creator.version}</version>
+        </dependency>
+
+        <!-- ============================================================
+             SPRING CLOUD / MICROSERVICES
+        ============================================================ -->
+
+        <!--
+            Eureka Client: registers this service instance with the
+            Eureka Server on startup, sends heartbeats every 30s,
+            deregisters on graceful shutdown. Other services discover
+            Auth Service by name (auth-service), not by hard-coded URL.
+        -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+        </dependency>
+
+        <!--
+            OpenFeign: declarative HTTP client for calling Keycloak's
+            token endpoint during OAuth2 token exchange (Step 17).
+            Used only for the Keycloak call — no other service-to-service
+            HTTP calls exist in Auth Service. Auth Service is a leaf node
+            in the call graph: it is called by others, it calls only Keycloak.
+        -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-openfeign</artifactId>
+        </dependency>
+
+        <!--
+            Resilience4j: circuit breaker + retry for the Keycloak FeignClient.
+            If Keycloak is down, OAuth2 login returns 503.
+            Email/OTP login (which does NOT call Keycloak) continues working.
+            This is the correct isolation: one external dependency down
+            must not take down the entire auth surface.
+        -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-circuitbreaker-resilience4j</artifactId>
+        </dependency>
+
+        <!-- ============================================================
+             KAFKA
+             Auth Service is a PRODUCER only.
+             It never consumes Kafka events — it publishes them.
+             Published events: user.registered, notification.email (OTP, verify,
+             password reset emails), user.password-changed.
+             Consumers: Notification Service (email delivery).
+        ============================================================ -->
+
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
+
+        <!-- ============================================================
+             OBSERVABILITY
+             All three pillars: metrics (Prometheus), traces (OTel → Tempo),
+             logs (MDC + correlation ID — configured in application.yml).
+        ============================================================ -->
+
+        <!--
+            Prometheus registry: exposes /actuator/prometheus endpoint.
+            Prometheus server scrapes this endpoint on its configured interval.
+            Grafana reads from Prometheus for dashboards.
+        -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
+        <!--
+            Micrometer OTel bridge: translates Micrometer Observations
+            (which Spring Boot auto-instruments for HTTP requests, DB queries,
+            etc.) into OpenTelemetry spans. This is the bridge between
+            Spring Boot's instrumentation API and the OTel ecosystem.
+        -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-otel</artifactId>
+        </dependency>
+
+        <!--
+            OTel OTLP exporter: ships spans to the OpenTelemetry Collector
+            over gRPC (OTLP protocol). The Collector forwards to Grafana Tempo.
+            Endpoint configured in application.yml:
+            management.otlp.tracing.endpoint=http://otel-collector:4318/v1/traces
+        -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-otlp</artifactId>
+        </dependency>
+
+        <!-- ============================================================
+             TESTING
+             Rules: No H2. No mocked DBs. Testcontainers for everything.
+             Real PostgreSQL. Real Redis. Real Kafka (for integration tests).
+             Unit tests use Mockito (included in spring-boot-starter-test).
+        ============================================================ -->
+
+        <!--
+            Includes: JUnit 5, Mockito, AssertJ, Spring Test, MockMvc.
+            Excludes JUnit 4 (vintage engine) automatically via the
+            spring-boot-starter-parent's dependency management.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+            Spring Security testing utilities:
+            @WithMockUser, @WithUserDetails for controller tests.
+            SecurityMockMvcRequestPostProcessors for JWT injection in
+            MockMvc integration tests.
+        -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+            Kafka test support: EmbeddedKafkaBroker for unit tests,
+            KafkaTestUtils for producer/consumer utilities.
+            Used when testing that correct Kafka events are published
+            after registration, OTP verify, etc.
+        -->
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+            Testcontainers JUnit 5 extension: @Testcontainers, @Container.
+            This is the entry point for all container lifecycle management
+            in tests. Brings in the base testcontainers artifact transitively.
+        -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+            Real PostgreSQL container for integration tests.
+            Tests run against the exact same PostgreSQL version as production.
+            No schema drift, no dialect differences, no H2 surprises.
+        -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+            Kafka container for integration tests that verify
+            event publishing (user.registered, notification.email).
+            Version governed by the Testcontainers BOM — no version specified.
+        -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>kafka</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+            Redis OTP integration tests use GenericContainer<> with
+            the "redis:7-alpine" image — available from the base
+            testcontainers artifact pulled in transitively by junit-jupiter.
+            No dedicated Redis testcontainers module needed:
+
+            @Container
+            static GenericContainer<?> redis =
+                new GenericContainer<>("redis:7-alpine").withExposedPorts(6379);
+
+            This approach is preferred over third-party Redis modules
+            because it gives explicit control over the Redis version
+            and startup command (e.g., adding requirepass for auth tests).
+        -->
+
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!--
+                Spring Boot Maven Plugin:
+                1. Repackages the JAR into an executable fat-JAR with
+                   an embedded Tomcat server.
+                2. Layered JAR mode separates dependencies, Spring Boot
+                   classes, and application classes into distinct JAR layers.
+                   This makes Docker image builds dramatically faster:
+                   dependencies layer (rarely changes) is cached separately
+                   from application code layer (changes every commit).
+                   In the Dockerize phase (Phase 6), we exploit these layers
+                   with a multi-stage Dockerfile.
+            -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <layers>
+                        <enabled>true</enabled>
+                    </layers>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>
