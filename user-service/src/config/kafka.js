@@ -3,7 +3,7 @@ const logger = require('./logger');
 const {config} = require('.');
 const kafka = new Kafka({
      clientId: config.KAFKA_CLIENT_ID,
-     brokers: [config.KAFKA_BROKER || 'localhost:9093'],
+     brokers: [config.KAFKA_BROKER || 'localhost:29093'],
      logLevel: logLevel.ERROR,
      retry: {
           initialRetryTime: 300,

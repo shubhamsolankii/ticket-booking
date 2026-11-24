@@ -50,7 +50,7 @@ async function verifyOtp(otp, otpSessionId){
     const {hashedOtp: storedOtp, meta } = JSON.parse(rawData);
 
     const attemptsKey = `otp:attempts:${meta.email}`;
-    const attemptsCount = parseInt(await redis.getg(attemptsKey) || '0');
+    const attemptsCount = parseInt(await redis.get(attemptsKey) || '0');
 
     if(attemptsCount >= ATTEMPT_MAX){
         throw new TooManyRequestsError("Too many attemps to verify OTP")

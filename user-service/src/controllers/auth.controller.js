@@ -1,7 +1,8 @@
 const { config } = require("../config");
 const asyncHandler = require("../utils/asyncHandler");
-const { BadRequestError } = require("../utils/error");
+const { BadRequestError, UnauthorizedError } = require("../utils/error");
 const authService = require("../services/auth.service");
+const getDeviceFingerprint = require("../utils/deviceFingerprint");
 
 
 exports.sendOTP = asyncHandler( async(req, res) =>{
@@ -42,4 +43,92 @@ exports.verifyOTP = asyncHandler( async(req, res) =>{
         message: "User account created",
         data: user
     })
+})
+
+exports.login = asyncHandler(async(req, res) =>{
+    const {email, password} = req.body;
+
+    if(!email || !password){
+        throw new BadRequestError("Email and password are required");
+    }
+
+    const deviceId = getDeviceFingerprint(req);
+    const {accessToken, refreshToken,loggedInUser} = await authService.login(email, password, deviceId);
+
+    res.cookie("accessToken", accessToken, {
+        httpOnly : true,
+        secure: true,
+        sameSite : "strict",
+        maxAge: config.ACCESS_TOKEN_EXP_SEC * 1000
+    })
+
+    res.cookie("refreshToken", refreshToken, {
+         httpOnly : true,
+        secure: true,
+        sameSite : "strict",
+        maxAge: config.REFRESH_TOKEN_EXP_SEC * 1000
+    }).status(200).json({
+        success: true,
+        message: "Logged in successfully",
+        loggedInUser
+    })
+})
+
+exports.rotateRefreshToken = asyncHandler(async(req, res)=>{
+    const refreshToken = req.cookies.refreshToken;
+    if(!refreshToken){
+        throw new UnauthorizedError("Refresh token missing. Login Again")
+    }
+
+    const deviceId = getDeviceFingerprint(req);
+    const {newAccessToken, newRefreshToken} = await authService.rotateRefreshToken(refreshToken, deviceId);
+
+    res.cookie("accessToken", newAccessToken, {
+        httpOnly: true,
+        secure: true,
+        sameSite: "strict",
+        maxAge: config.ACCESS_TOKEN_EXP_SEC * 1000
+    })
+
+     res.cookie("refreshToken", newRefreshToken, {
+        httpOnly: true,
+        secure: true,
+        sameSite: "strict",
+        maxAge: config.REFRESH_TOKEN_EXP_SEC * 1000
+    }).status(200).json({
+        success: true,
+        message: "Access and Refresh Token reissued"
+    })
+
+    
+})
+
+exports.verifyGoogleIdToken = asyncHandler(async (req, res) => {
+     const {idToken} = req.body;
+     if(!idToken){
+          throw new BadRequestError("Invalid Google ID Token", "INVALID TOKEN")
+     }
+
+     const deviceId = getDeviceFingerprint(req);
+     
+     const {accessToken, refreshToken, loggedInUser} = await authService.verifyGoogleIdToken(idToken, deviceId);
+     
+     res.cookie("accessToken", accessToken, {
+          httpOnly: true,
+          secure: true,
+          sameSite: "strict",
+          maxAge: config.ACCESS_TOKEN_EXP_SEC * 1000
+     })
+     res.cookie("refreshToken", refreshToken, {
+          httpOnly: true,
+          secure: true,
+          sameSite: "strict",
+          maxAge: config.REFRESH_TOKEN_EXP_SEC * 1000
+     }).status(200).json({
+          success: true,
+          message: "Logged in successfully",
+          loggedInUser
+     })
+
+
 })
